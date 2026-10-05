@@ -21,6 +21,8 @@ Editorial diagram types for Claude Code, Codex, Factory Droid, Pi, and Agent Ski
 
 No Figma. No generic rounded boxes. No 30-minute color-picking sessions.
 
+Project site: [diagramdesign.dev](https://diagramdesign.dev?utm_source=diagram-design&utm_medium=readme&utm_campaign=github&utm_content=intro)
+
 ---
 
 ## Why I built it
