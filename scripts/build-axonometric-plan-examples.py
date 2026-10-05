@@ -316,6 +316,8 @@ def build_phased(plan: Plan, P, sk, skin, top, out, vh, ox, minx):
                 close()
                 if b.step in seen:
                     raise ValueError(f"phase {b.step} paints in two runs")
+                if seen and b.step < max(seen):
+                    raise ValueError(f"phase {b.step} paints after phase {max(seen)}; number phases back to front so the DOM reads in narrative order")
                 seen.add(b.step)
                 run_step = b.step
             run.append(g)
@@ -425,7 +427,7 @@ def campus() -> Plan:
 
 
 def post(x, y):
-    return Box(Rect(x - 3, y - 3, x + 3, y + 3, 3), 18, step=1)
+    return Box(Rect(x - 3, y - 3, x + 3, y + 3, 3), 18, step=2)
 
 
 def coffee_shop() -> Plan:
@@ -440,20 +442,20 @@ def coffee_shop() -> Plan:
                Box(Rect(100, 48, 196, 66), 14, inset_top=True)]
     restroom = [Box(Rect(264, 12, 288, 26), 16, inset_top=True),
                 Box(Rect(320, 12, 340, 36), 12)]
-    bar = [Box(Rect(10, 96, 32, 118), 30, step=2),
-           Box(Rect(10, 122, 32, 162), 26, inset_top=True, step=2),
-           Box(Rect(10, 166, 32, 180), 28, step=2),
-           Box(Rect(10, 184, 32, 208), 16, inset_top=True, step=2),
-           Box(Rect(78, 100, 94, 140), 20, inset_top=True, step=2),
-           Box(Rect(78, 144, 94, 212), 16, step=2)]
+    bar = [Box(Rect(10, 96, 32, 118), 30, step=1),
+           Box(Rect(10, 122, 32, 162), 26, inset_top=True, step=1),
+           Box(Rect(10, 166, 32, 180), 28, step=1),
+           Box(Rect(10, 184, 32, 208), 16, inset_top=True, step=1),
+           Box(Rect(78, 100, 94, 140), 20, inset_top=True, step=1),
+           Box(Rect(78, 144, 94, 212), 16, step=1)]
     queue = [post(118, y) for y in (126, 158, 190, 222)]
     seating = [Box(Rect(x - 12, y - 12, x + 12, y + 12, 12), 12, inset_top=True, step=3)
                for x, y in ((222, 114), (290, 114), (222, 186), (290, 186))]
     seating += [Box(Rect(330, 100, 348, 240), 8, step=3),
                 Box(Rect(206, 216, 306, 236), 12, inset_top=True, step=3)]
     rooms = [
-        Room("Entrance", "door, queue", Rect(100, 86, 196, 254), (148, 170), step=1),
-        Room("Espresso bar", "order, pickup", Rect(6, 86, 100, 254), (42, 228), focal=True, step=2),
+        Room("Entrance", "door, queue", Rect(100, 86, 196, 254), (148, 170), step=2),
+        Room("Espresso bar", "order, pickup", Rect(6, 86, 100, 254), (42, 228), focal=True, step=1),
         Room("Seating", "22 seats", Rect(196, 86, 354, 254), (252, 150), step=3),
         Room("Kitchen", "back of house", Rect(6, 6, 250, 80), (46, 60)),
         Room("Restroom", "1 stall", Rect(256, 6, 354, 80), (296, 50)),
@@ -469,7 +471,7 @@ def coffee_shop() -> Plan:
                ("", "ink", "Reading the plan", ["Posts mark the queue lane along the counter", "The tall unit on the back bar is the fridge", "Round tables seat two, the long table seats six", "Gaps in walls are doors"]),
                ("", "muted", "When to use it", "Fit-outs, staffing reviews, and new-store briefs. For a list of equipment and costs, a table is faster.")],
         footer="coffee shop · axonometric plan", steps=3,
-        phases={1: "The entrance and the queue posts", 2: "The espresso bar: back bar and counter", 3: "Seating: tables and the window bench"})
+        phases={1: "The espresso bar: back bar and counter", 2: "The entrance and the queue posts", 3: "Seating: tables and the window bench"})
 
 
 def warehouse() -> Plan:
