@@ -51,27 +51,25 @@ def normalize_newlines(text: str) -> str:
     return text.replace("\r\n", "\n").replace("\r", "\n")
 
 
-def run_extract(args: list[str]) -> str:
-    proc = subprocess.run(
+def invoke(args: list[str]) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
         [sys.executable, str(EXTRACT), *args],
         capture_output=True,
         text=True,
         encoding="utf-8",
         errors="replace",
     )
+
+
+def run_extract(args: list[str]) -> str:
+    proc = invoke(args)
     if proc.returncode != 0:
         fail(f"extractor exited {proc.returncode} for {args}: {proc.stderr.strip()}")
     return proc.stdout
 
 
 def expect_extract_error(args: list[str], message: str) -> None:
-    proc = subprocess.run(
-        [sys.executable, str(EXTRACT), *args],
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-    )
+    proc = invoke(args)
     if proc.returncode != 2 or message not in proc.stderr:
         fail(
             f"expected exit 2 containing {message!r} for {args}; got "
@@ -519,6 +517,78 @@ def check_security_and_limits(tmp: Path) -> None:
         [str(too_many_cells)],
         f"cell limit exceeded (max {extractor.MAX_CELLS_PER_PAGE})",
     )
+
+    for name, coordinate, diagnostic in (
+        ("nan", "NaN", "must be finite"),
+        ("infinity", "Infinity", "must be finite"),
+        ("derived-overflow", "1e308", "bounding box overflow"),
+    ):
+        malformed_geometry = tmp / f"{name}.drawio"
+        malformed_geometry.write_text(
+            '<mxGraphModel><root><mxCell id="node" value="Node" vertex="1">'
+            f'<mxGeometry x="{coordinate}" y="0" width="{coordinate}" height="10"/>'
+            '</mxCell></root></mxGraphModel>',
+            encoding="utf-8",
+        )
+        for output_args in ([], ["--json"]):
+            expect_extract_error(
+                [str(malformed_geometry), *output_args], diagnostic
+            )
+
+    canvas_span_overflow = tmp / "canvas-span-overflow.drawio"
+    canvas_span_overflow.write_text(
+        '<mxGraphModel><root>'
+        '<mxCell id="left" value="Left" vertex="1">'
+        '<mxGeometry x="-1e308" y="0" width="10" height="10"/></mxCell>'
+        '<mxCell id="right" value="Right" vertex="1">'
+        '<mxGeometry x="1e308" y="0" width="10" height="10"/></mxCell>'
+        '</root></mxGraphModel>',
+        encoding="utf-8",
+    )
+    for output_args in ([], ["--json"]):
+        expect_extract_error(
+            [str(canvas_span_overflow), *output_args], "canvas span overflow"
+        )
+
+    parent_position_overflow = tmp / "parent-position-overflow.drawio"
+    parent_position_overflow.write_text(
+        '<mxGraphModel><root>'
+        '<mxCell id="parent" value="Parent" vertex="1">'
+        '<mxGeometry x="1e308" y="0" width="10" height="10"/></mxCell>'
+        '<mxCell id="child" value="Child" vertex="1" parent="parent">'
+        '<mxGeometry x="1e308" y="0" width="10" height="10"/></mxCell>'
+        '</root></mxGraphModel>',
+        encoding="utf-8",
+    )
+    for output_args in ([], ["--json"]):
+        expect_extract_error(
+            [str(parent_position_overflow), *output_args], "page 0: geometry overflow"
+        )
+
+    deep_parents = tmp / "deep-parents.drawio"
+    deep_parents.write_text(
+        '<mxGraphModel><root>'
+        + ''.join(
+            f'<mxCell id="n{index}" value="Node" vertex="1" parent="n{index - 1}">'
+            '<mxGeometry x="1" y="1" width="1" height="1"/></mxCell>'
+            for index in range(1, 1101)
+        )
+        + '</root></mxGraphModel>',
+        encoding="utf-8",
+    )
+    deepest = json.loads(run_extract([str(deep_parents), "--json"]))["pages"][0]["nodes"][-1]
+    if (deepest["x"], deepest["y"], deepest["depth"]) != (1100, 1100, 1099):
+        fail(f"deep parent chain resolved incorrectly: {deepest}")
+
+    parent_cycle = tmp / "parent-cycle.drawio"
+    parent_cycle.write_text(
+        '<mxGraphModel><root>'
+        '<mxCell id="a" value="A" vertex="1" parent="b"/>'
+        '<mxCell id="b" value="B" vertex="1" parent="a"/>'
+        '</root></mxGraphModel>',
+        encoding="utf-8",
+    )
+    expect_extract_error([str(parent_cycle)], "parent cycle")
 
     proc = subprocess.run(
         [sys.executable, str(EXTRACT), str(FIXTURE), "--max-rows", "0"],
