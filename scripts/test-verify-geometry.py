@@ -17,6 +17,8 @@ ZONED = ASSET_DIR / "example-dp-integration.html"
 SEQUENCE_OAUTH = ASSET_DIR / "example-sequence-oauth.html"
 HIGH_LEVEL = ASSET_DIR / "example-high-level.html"
 QUEUE_ANIMATED = ASSET_DIR / "example-queue-animated.html"
+MEDALLION = ASSET_DIR / "example-medallion.html"
+DB_SCHEMA = ASSET_DIR / "example-db-schema.html"
 
 
 def load_verifier():
@@ -241,6 +243,21 @@ def main() -> int:
         ),
         1,
     )
+    # Shared curved run with separate straight runs: only curve sampling sees it.
+    check_message(
+        "two connectors sharing a curved run",
+        document(
+            f'<path d="M 10,100 Q 50,100 50,60 H 90" {arrow}/>'
+            f'<path d="M 10,110 V 100 Q 50,100 50,60 V 20" {arrow}/>'
+        ),
+        "runs on top of",
+    )
+    # Two connectors that only cross at a right angle are not stacked.
+    check(
+        "perpendicular crossing is not a stacked run",
+        document(f'<path d="M 10,50 H 90" {arrow}/><path d="M 50,10 V 90" {arrow}/>'),
+        0,
+    )
     # Coordinates under a rotate are not canvas space; skip rather than misjudge.
     check(
         "connector under a non-translate transform is skipped",
@@ -252,6 +269,9 @@ def main() -> int:
     check_file("shipped swimlane example", SWIMLANE, 0)
     check_file("shipped high-level example", HIGH_LEVEL, 0)
     check_file("shipped queue animation", QUEUE_ANIMATED, 0)
+    # Medallion's promotion arcs meet head to tail at each tier; that joint stays legal.
+    check_file("shipped medallion chain joints", MEDALLION, 0)
+    check_file("shipped db-schema example", DB_SCHEMA, 0)
     check_file("shipped zoned example", ZONED, 0)
     check_file("shipped sequence-oauth example", SEQUENCE_OAUTH, 0)
 

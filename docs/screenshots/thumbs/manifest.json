@@ -54,11 +54,11 @@
     {
       "thumb": "db-schema.webp",
       "source": "docs/screenshots/db-schema.png",
-      "source_sha256": "939061c701f7bb70aa1b5f7ee1fe2da3a68b3b8edc4822cd9dcb7586acd7a2d6",
+      "source_sha256": "d5a82a34734c7d1dcd82770a6482cbb238ba1b79dda6cc36e4716a58f0bba24f",
       "width": 600,
       "height": 312,
       "quality": 82,
-      "thumb_sha256": "77ad43cc5cb8509fd76b1fdfee62827cb876c3893df6e46c2b1a278c50748e41"
+      "thumb_sha256": "e9a1353e9c55c8953f6118707d8200a82a71b45da24fb3a563f6e4cb725ffa2a"
     },
     {
       "thumb": "dependency.webp",

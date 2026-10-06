@@ -39,8 +39,9 @@ and chart bars stay out of it. Five shapes are reported:
 * Two connectors leaving (or two arriving at) the same edge of a node closer
   than primitives-core.md rule 4 allows: 12px, or 8px on an edge shorter than
   48px. A head-to-tail chain joint is allowed.
-* Two connectors whose straight segments lie on the same line for more than
-  4px, the stacked trunk primitives-core.md rule 3 forbids.
+* Two connectors drawn within 1px of each other for more than 4px, straight
+  or curved: the stacked trunk primitives-core.md rule 3 forbids. Curves and
+  arcs are flattened into short chords so their shape is compared too.
 
 An arrowed path whose data the checker cannot parse is reported too, so a
 connector never passes because nothing read it.
@@ -53,6 +54,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import math
 import re
 import sys
 from pathlib import Path
@@ -170,11 +172,86 @@ def number(attrs: str, name: str) -> float | None:
 Segment = tuple[str, float, float, float, float]  # (kind, x1, y1, x2, y2)
 
 
+CHORD_LENGTH = 2.0  # curves are flattened into chords about this long
+
+
+def chord_count(points: list[tuple[float, float]]) -> int:
+    """Chords to split a curve into, from the length of its control polygon."""
+
+    length = sum(math.dist(a, b) for a, b in zip(points, points[1:]))
+    return max(4, min(256, math.ceil(length / CHORD_LENGTH)))
+
+
+def bezier(points: list[tuple[float, float]]) -> list[tuple[float, float]]:
+    """Points along a quadratic or cubic Bezier, excluding its start."""
+
+    steps = chord_count(points)
+    out = []
+    for i in range(1, steps + 1):
+        t = i / steps
+        level = points
+        while len(level) > 1:  # de Casteljau
+            level = [
+                (a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t)
+                for a, b in zip(level, level[1:])
+            ]
+        out.append(level[0])
+    return out
+
+
+def arc(
+    start: tuple[float, float], rx: float, ry: float, rotation: float,
+    large: float, sweep: float, end: tuple[float, float],
+) -> list[tuple[float, float]]:
+    """Points along an SVG elliptical arc (SVG 2 appendix B.2.4), excluding its start."""
+
+    (x1, y1), (x2, y2) = start, end
+    rx, ry = abs(rx), abs(ry)
+    if rx == 0 or ry == 0 or start == end:
+        return [end]
+    phi = math.radians(rotation)
+    cos_p, sin_p = math.cos(phi), math.sin(phi)
+    hx, hy = (x1 - x2) / 2, (y1 - y2) / 2
+    x1p, y1p = cos_p * hx + sin_p * hy, -sin_p * hx + cos_p * hy
+    scale = (x1p / rx) ** 2 + (y1p / ry) ** 2
+    if scale > 1:
+        rx, ry = rx * math.sqrt(scale), ry * math.sqrt(scale)
+    denominator = (rx * y1p) ** 2 + (ry * x1p) ** 2
+    numerator = (rx * ry) ** 2 - denominator
+    root = math.sqrt(max(0.0, numerator / denominator)) if denominator else 0.0
+    if large == sweep:
+        root = -root
+    cxp, cyp = root * rx * y1p / ry, -root * ry * x1p / rx
+    cx = cos_p * cxp - sin_p * cyp + (x1 + x2) / 2
+    cy = sin_p * cxp + cos_p * cyp + (y1 + y2) / 2
+    ux, uy = (x1p - cxp) / rx, (y1p - cyp) / ry
+    vx, vy = (-x1p - cxp) / rx, (-y1p - cyp) / ry
+    theta = math.atan2(uy, ux)
+    delta = math.atan2(ux * vy - uy * vx, ux * vx + uy * vy)
+    if not sweep and delta > 0:
+        delta -= 2 * math.pi
+    elif sweep and delta < 0:
+        delta += 2 * math.pi
+    steps = max(4, min(256, math.ceil(abs(delta) * max(rx, ry) / CHORD_LENGTH)))
+    out = []
+    for i in range(1, steps + 1):
+        angle = theta + delta * i / steps
+        ex, ey = rx * math.cos(angle), ry * math.sin(angle)
+        out.append((cos_p * ex - sin_p * ey + cx, sin_p * ex + cos_p * ey + cy))
+    out[-1] = end
+    return out
+
+
 def path_segments(d: str) -> list[Segment] | None:
-    """Flatten a path into straight and curved segments, or None if unparseable."""
+    """Flatten a path into straight segments and curve chords, or None if unparseable.
+
+    Straight commands become one `line` segment each. Curves and arcs become a
+    run of short `curve` chords, so overlap checks can follow their shape.
+    """
 
     segments: list[Segment] = []
     x = y = start_x = start_y = 0.0
+    previous_control: tuple[str, float, float] | None = None  # for S and T reflection
     command = ""
     pos = 0
     while not PATH_END_RE.match(d, pos):
@@ -198,20 +275,41 @@ def path_segments(d: str) -> list[Segment] | None:
             args.append(float(match.group(1)))
             pos = match.end()
         relative = command.islower()
+        ox, oy = (x, y) if relative else (0.0, 0.0)
         if upper == "H":
-            nx, ny = (x + args[0] if relative else args[0]), y
+            nx, ny = args[0] + ox, y
         elif upper == "V":
-            nx, ny = x, (y + args[0] if relative else args[0])
+            nx, ny = x, args[0] + oy
         else:
-            nx, ny = args[-2], args[-1]
-            if relative:
-                nx, ny = x + nx, y + ny
+            nx, ny = args[-2] + ox, args[-1] + oy
         if upper == "M":
             x, y = start_x, start_y = nx, ny
             command = "l" if relative else "L"  # implicit lineto after moveto
+            previous_control = None
             continue
-        kind = "line" if upper in "LHV" else "curve"
-        segments.append((kind, x, y, nx, ny))
+        if upper in "LHV":
+            segments.append(("line", x, y, nx, ny))
+            previous_control = None
+        else:
+            pairs = [(args[i] + ox, args[i + 1] + oy) for i in range(0, len(args) - 1, 2)]
+            if upper in "ST":
+                family = "C" if upper == "S" else "Q"
+                if previous_control and previous_control[0] == family:
+                    reflected = (2 * x - previous_control[1], 2 * y - previous_control[2])
+                else:
+                    reflected = (x, y)
+                pairs = [reflected] + pairs
+            if upper == "A":
+                points = arc((x, y), args[0], args[1], args[2], args[3], args[4], (nx, ny))
+                previous_control = None
+            else:
+                points = bezier([(x, y)] + pairs)
+                family = "C" if upper in "CS" else "Q"
+                previous_control = (family, pairs[-2][0], pairs[-2][1])
+            px, py = x, y
+            for qx, qy in points:
+                segments.append(("curve", px, py, qx, qy))
+                px, py = qx, qy
         x, y = nx, ny
     return segments
 
@@ -418,20 +516,57 @@ def check_connectors(path: Path, source: str) -> list[str]:
     return findings
 
 
-def collinear_overlap(a: Segment, b: Segment) -> float:
-    """Length two axis-aligned straight segments share on one line, else 0."""
+STACK_TOLERANCE = 1.0  # strokes this close are drawn on top of each other
+SAMPLE_STEP = 1.0  # distance between samples when measuring a shared run
 
-    if a[0] != "line" or b[0] != "line":
+
+def bounds(segments: list[Segment], pad: float) -> tuple[float, float, float, float]:
+    xs = [v for _, x1, _, x2, _ in segments for v in (x1, x2)]
+    ys = [v for _, _, y1, _, y2 in segments for v in (y1, y2)]
+    return min(xs) - pad, min(ys) - pad, max(xs) + pad, max(ys) + pad
+
+
+def distance_to_segment(px: float, py: float, segment: Segment) -> float:
+    _, x1, y1, x2, y2 = segment
+    dx, dy = x2 - x1, y2 - y1
+    length_sq = dx * dx + dy * dy
+    t = 0.0 if not length_sq else max(0.0, min(1.0, ((px - x1) * dx + (py - y1) * dy) / length_sq))
+    return math.hypot(px - (x1 + t * dx), py - (y1 + t * dy))
+
+
+def shared_run(a: list[Segment], b: list[Segment]) -> float:
+    """Length of connector `a` drawn within 1px of connector `b`.
+
+    Straight runs and curve chords count alike, so a shared curved trunk is
+    caught as well as a straight one. Samples near an endpoint the two share
+    are skipped: a head-to-tail joint or a common port is judged by the port
+    checks, not counted as a stacked run.
+    """
+
+    left, top, right, bottom = bounds(b, STACK_TOLERANCE)
+    a_left, a_top, a_right, a_bottom = bounds(a, 0.0)
+    if a_right < left or a_left > right or a_bottom < top or a_top > bottom:
         return 0.0
-    _, ax1, ay1, ax2, ay2 = a
-    _, bx1, by1, bx2, by2 = b
-    a_flat, b_flat = abs(ay1 - ay2) <= AXIS_TOLERANCE, abs(by1 - by2) <= AXIS_TOLERANCE
-    a_tall, b_tall = abs(ax1 - ax2) <= AXIS_TOLERANCE, abs(bx1 - bx2) <= AXIS_TOLERANCE
-    if a_flat and b_flat and abs(ay1 - by1) <= BORDER_TOLERANCE:
-        return min(max(ax1, ax2), max(bx1, bx2)) - max(min(ax1, ax2), min(bx1, bx2))
-    if a_tall and b_tall and abs(ax1 - bx1) <= BORDER_TOLERANCE:
-        return min(max(ay1, ay2), max(by1, by2)) - max(min(ay1, ay2), min(by1, by2))
-    return 0.0
+    ends_a = ((a[0][1], a[0][2]), (a[-1][3], a[-1][4]))
+    ends_b = ((b[0][1], b[0][2]), (b[-1][3], b[-1][4]))
+    joints = [p for p in ends_a if any(math.dist(p, q) <= STACK_TOLERANCE for q in ends_b)]
+    boxes = [bounds([segment], STACK_TOLERANCE) for segment in b]
+    shared = 0
+    for _, x1, y1, x2, y2 in a:
+        steps = max(1, math.ceil(math.hypot(x2 - x1, y2 - y1) / SAMPLE_STEP))
+        for i in range(steps):
+            px, py = x1 + (x2 - x1) * i / steps, y1 + (y2 - y1) * i / steps
+            if not (left <= px <= right and top <= py <= bottom):
+                continue
+            if any(math.dist((px, py), joint) < CORNER_CLEARANCE for joint in joints):
+                continue
+            if any(
+                bx0 <= px <= bx1 and by0 <= py <= by1
+                and distance_to_segment(px, py, segment) <= STACK_TOLERANCE
+                for segment, (bx0, by0, bx1, by1) in zip(b, boxes)
+            ):
+                shared += 1
+    return shared * SAMPLE_STEP
 
 
 def stacked_connectors(
@@ -442,13 +577,11 @@ def stacked_connectors(
     findings: list[str] = []
     for i, (line_a, label_a, segments_a) in enumerate(parsed):
         for line_b, label_b, segments_b in parsed[i + 1 :]:
-            shared = max(
-                (collinear_overlap(a, b) for a in segments_a for b in segments_b), default=0.0
-            )
+            shared = max(shared_run(segments_a, segments_b), shared_run(segments_b, segments_a))
             if shared > BORDER_MIN_RUN:
                 findings.append(
                     f"{path.name}:{line_b}: connector {label_b} runs on top of {label_a}"
-                    f" (line {line_a}) for {shared:g}px - offset one route by at least"
+                    f" (line {line_a}) for about {shared:g}px - offset one route by at least"
                     f" {SHARED_PORT_MIN:g}px so each arrow stays traceable"
                 )
     return findings

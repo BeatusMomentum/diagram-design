@@ -402,8 +402,8 @@
       "slug": "db-schema",
       "source": "skills/diagram-design/assets/example-db-schema.html",
       "screenshot": "docs/screenshots/db-schema.png",
-      "source_sha256": "58d473906c57670fecee29bc55377df5b433549445962204412ebd2c081b76db",
-      "screenshot_sha256": "939061c701f7bb70aa1b5f7ee1fe2da3a68b3b8edc4822cd9dcb7586acd7a2d6",
+      "source_sha256": "6031e6df48ba3511906f30ceb0b3fe5741091dd6bb30ca67ac6ab178492de57b",
+      "screenshot_sha256": "d5a82a34734c7d1dcd82770a6482cbb238ba1b79dda6cc36e4716a58f0bba24f",
       "width": 2480,
       "height": 1288
     }
