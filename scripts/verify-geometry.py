@@ -28,7 +28,7 @@ Shape heuristics follow the shipped templates:
 It also checks connector routing (references/primitives-core.md rule 1). A
 connector is a `<path>` or `<line>` that carries an arrow marker; a node, for
 this check, is a stroked `<rect>` at least 60x40, so unstroked quadrant fills
-and chart bars stay out of it. Four shapes are reported:
+and chart bars stay out of it. Five shapes are reported:
 
 * A straight segment that is neither horizontal nor vertical. Loop write-back
   spokes (`class="spoke"`) are the documented radial exception and skipped.
@@ -36,9 +36,14 @@ and chart bars stay out of it. Four shapes are reported:
   the node fill, so the arrow appears to start at the corner.
 * A connector endpoint within 8px of a node corner, where the rounded corner
   makes the port ambiguous.
-* Two connectors leaving (or two arriving at) the same node less than 8px
-  apart, the hard minimum in primitives-core.md rule 4, so neither arrow can be
-  traced alone. A head-to-tail chain joint is allowed.
+* Two connectors leaving (or two arriving at) the same edge of a node closer
+  than primitives-core.md rule 4 allows: 12px, or 8px on an edge shorter than
+  48px. A head-to-tail chain joint is allowed.
+* Two connectors whose straight segments lie on the same line for more than
+  4px, the stacked trunk primitives-core.md rule 3 forbids.
+
+An arrowed path whose data the checker cannot parse is reported too, so a
+connector never passes because nothing read it.
 
 Usage:
     python3 scripts/verify-geometry.py --all
@@ -131,9 +136,11 @@ TAG_RE = re.compile(
 TRANSLATE_RE = re.compile(
     r"^\s*translate\(\s*([-+]?[\d.]+)(?:[\s,]+([-+]?[\d.]+))?\s*\)\s*$"
 )
-PATH_TOKEN_RE = re.compile(
-    r"[MmLlHhVvQqCcSsTtAaZz]|[-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?"
-)
+PATH_COMMAND_RE = re.compile(r"[\s,]*([MmLlHhVvQqCcSsTtAaZz])")
+PATH_NUMBER_RE = re.compile(r"[\s,]*([-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?)")
+# Arc flags are one character and may run into the next number: `A 8 8 0 0120 20`.
+PATH_FLAG_RE = re.compile(r"[\s,]*([01])")
+PATH_END_RE = re.compile(r"[\s,]*$")
 # Parameters each path command consumes per repetition.
 PATH_ARITY = {"M": 2, "L": 2, "H": 1, "V": 1, "Q": 4, "T": 2, "C": 6, "S": 4, "A": 7, "Z": 0}
 
@@ -142,7 +149,9 @@ BORDER_TOLERANCE = 1.0  # a segment this close to a node edge lies on it
 BORDER_MIN_RUN = 4.0  # shorter shared runs are a port touching the edge, not a ride
 PORT_TOLERANCE = 4.0  # an endpoint this close to a node outline attaches to it
 CORNER_CLEARANCE = 8.0  # ports keep this far from a corner (primitives-core rule 1)
-SHARED_PORT_MIN = 8.0  # two ports on one node keep at least this far apart (rule 4)
+SHARED_PORT_MIN = 12.0  # two ports on one edge keep at least this far apart (rule 4)
+SMALL_PORT_MIN = 8.0  # rule 4's floor for very small boxes...
+SMALL_EDGE = 48.0  # ...meaning an edge shorter than this
 
 
 def attribute(attrs: str, name: str) -> str | None:
@@ -164,31 +173,30 @@ Segment = tuple[str, float, float, float, float]  # (kind, x1, y1, x2, y2)
 def path_segments(d: str) -> list[Segment] | None:
     """Flatten a path into straight and curved segments, or None if unparseable."""
 
-    tokens = PATH_TOKEN_RE.findall(d)
     segments: list[Segment] = []
     x = y = start_x = start_y = 0.0
     command = ""
-    index = 0
-    while index < len(tokens):
-        if tokens[index].isalpha():
-            command = tokens[index]
-            index += 1
+    pos = 0
+    while not PATH_END_RE.match(d, pos):
+        match = PATH_COMMAND_RE.match(d, pos)
+        if match:
+            command, pos = match.group(1), match.end()
             if command in "Zz":
                 if (x, y) != (start_x, start_y):
                     segments.append(("line", x, y, start_x, start_y))
                 x, y = start_x, start_y
                 continue
-        if not command:
-            return None
+        elif not command or command in "Zz":
+            return None  # numbers before the first command or after a closepath
         upper = command.upper()
-        arity = PATH_ARITY.get(upper)
-        if not arity or index + arity > len(tokens):
-            return None  # unknown command, numbers after Z, or truncated arguments
-        try:
-            args = [float(token) for token in tokens[index : index + arity]]
-        except ValueError:
-            return None
-        index += arity
+        args: list[float] = []
+        for slot in range(PATH_ARITY[upper]):
+            pattern = PATH_FLAG_RE if upper == "A" and slot in (3, 4) else PATH_NUMBER_RE
+            match = pattern.match(d, pos)
+            if not match:
+                return None  # truncated arguments or an unexpected character
+            args.append(float(match.group(1)))
+            pos = match.end()
         relative = command.islower()
         if upper == "H":
             nx, ny = (x + args[0] if relative else args[0]), y
@@ -257,10 +265,14 @@ def shifted(segments: list[Segment], frame: Offset) -> list[Segment]:
     return [(kind, x1 + dx, y1 + dy, x2 + dx, y2 + dy) for kind, x1, y1, x2, y2 in segments]
 
 
-def connectors(source: str) -> list[tuple[int, str, list[Segment]]]:
-    """Return (line number, short label, segments) for every arrowed connector."""
+def connectors(source: str) -> list[tuple[int, str, list[Segment] | None]]:
+    """Return (line number, short label, segments) for every arrowed connector.
 
-    found: list[tuple[int, str, list[Segment]]] = []
+    Segments are None for a path the parser cannot read, so the caller can
+    fail closed instead of passing a connector nothing checked.
+    """
+
+    found: list[tuple[int, str, list[Segment] | None]] = []
     for tag, attrs, start, frame in shapes(source):
         if tag == "rect" or frame is None:
             continue
@@ -280,7 +292,9 @@ def connectors(source: str) -> list[tuple[int, str, list[Segment]]]:
             d = attribute(attrs, "d") or ""
             segments = path_segments(d)
             label = f'<path d="{d if len(d) <= 48 else d[:45] + "..."}">'
-        if segments:
+        if segments is None:
+            found.append((line, label, None))
+        elif segments:
             found.append((line, label, shifted(segments, frame)))
     return found
 
@@ -327,6 +341,21 @@ def attached(px: float, py: float, node: Rect) -> bool:
     return max(outside_x, outside_y) <= PORT_TOLERANCE and inside <= PORT_TOLERANCE
 
 
+def port_edge(px: float, py: float, node: Rect) -> tuple[str, float, float]:
+    """Return (side, edge length, position along the edge) for an attached port."""
+
+    distances = {
+        "top": abs(py - node.y),
+        "bottom": abs(py - node.bottom),
+        "left": abs(px - node.x),
+        "right": abs(px - node.right),
+    }
+    side = min(distances, key=distances.__getitem__)
+    if side in {"top", "bottom"}:
+        return side, node.w, px
+    return side, node.h, py
+
+
 def near_corner(px: float, py: float, node: Rect) -> tuple[float, float] | None:
     if not attached(px, py, node):
         return None
@@ -341,8 +370,16 @@ def check_connectors(path: Path, source: str) -> list[str]:
     nodes = stroked_nodes(source)
     findings: list[str] = []
     ports: list[tuple[int, float, float, int, str, str, int]] = []
+    parsed: list[tuple[int, str, list[Segment]]] = []
     for ident, (line, label, segments) in enumerate(connectors(source)):
         where = f"{path.name}:{line}: connector {label}"
+        if segments is None:
+            findings.append(
+                f"{where} has path data the checker cannot parse"
+                f" - write it with absolute M/L/H/V/Q/C/A commands"
+            )
+            continue
+        parsed.append((line, label, segments))
         for kind, x1, y1, x2, y2 in segments:
             if kind == "line" and abs(x1 - x2) > AXIS_TOLERANCE and abs(y1 - y2) > AXIS_TOLERANCE:
                 findings.append(
@@ -377,6 +414,43 @@ def check_connectors(path: Path, source: str) -> list[str]:
                 if attached(px, py, node):
                     ports.append((index, px, py, line, label, role, ident))
     findings.extend(shared_ports(path, nodes, ports))
+    findings.extend(stacked_connectors(path, parsed))
+    return findings
+
+
+def collinear_overlap(a: Segment, b: Segment) -> float:
+    """Length two axis-aligned straight segments share on one line, else 0."""
+
+    if a[0] != "line" or b[0] != "line":
+        return 0.0
+    _, ax1, ay1, ax2, ay2 = a
+    _, bx1, by1, bx2, by2 = b
+    a_flat, b_flat = abs(ay1 - ay2) <= AXIS_TOLERANCE, abs(by1 - by2) <= AXIS_TOLERANCE
+    a_tall, b_tall = abs(ax1 - ax2) <= AXIS_TOLERANCE, abs(bx1 - bx2) <= AXIS_TOLERANCE
+    if a_flat and b_flat and abs(ay1 - by1) <= BORDER_TOLERANCE:
+        return min(max(ax1, ax2), max(bx1, bx2)) - max(min(ax1, ax2), min(bx1, bx2))
+    if a_tall and b_tall and abs(ax1 - bx1) <= BORDER_TOLERANCE:
+        return min(max(ay1, ay2), max(by1, by2)) - max(min(ay1, ay2), min(by1, by2))
+    return 0.0
+
+
+def stacked_connectors(
+    path: Path, parsed: list[tuple[int, str, list[Segment]]]
+) -> list[str]:
+    """Report two connectors drawn on top of each other (primitives-core rule 3)."""
+
+    findings: list[str] = []
+    for i, (line_a, label_a, segments_a) in enumerate(parsed):
+        for line_b, label_b, segments_b in parsed[i + 1 :]:
+            shared = max(
+                (collinear_overlap(a, b) for a in segments_a for b in segments_b), default=0.0
+            )
+            if shared > BORDER_MIN_RUN:
+                findings.append(
+                    f"{path.name}:{line_b}: connector {label_b} runs on top of {label_a}"
+                    f" (line {line_a}) for {shared:g}px - offset one route by at least"
+                    f" {SHARED_PORT_MIN:g}px so each arrow stays traceable"
+                )
     return findings
 
 
@@ -395,12 +469,18 @@ def shared_ports(
         for node_b, bx, by, line_b, label_b, role_b, id_b in ports[i + 1 :]:
             if node_a != node_b or id_a == id_b or role_a != role_b:
                 continue
-            if max(abs(ax - bx), abs(ay - by)) < SHARED_PORT_MIN:
-                node = nodes[node_a]
+            node = nodes[node_a]
+            side_a, length, along_a = port_edge(ax, ay, node)
+            side_b, _, along_b = port_edge(bx, by, node)
+            if side_a != side_b:
+                continue
+            minimum = SMALL_PORT_MIN if length < SMALL_EDGE else SHARED_PORT_MIN
+            gap = abs(along_a - along_b)
+            if gap < minimum:
                 findings.append(
-                    f"{path.name}:{line_b}: connector {label_b} shares the {bx:g},{by:g} port on"
-                    f" node {node} (line {node.line}) with {label_a} at line {line_a}"
-                    f" - give each connector its own attach point, >={SHARED_PORT_MIN:g}px apart"
+                    f"{path.name}:{line_b}: connector {label_b} attaches {gap:g}px from"
+                    f" {label_a} (line {line_a}) on the {side_a} edge of node {node}"
+                    f" (line {node.line}) - fan the ports at least {minimum:g}px apart"
                 )
     return findings
 

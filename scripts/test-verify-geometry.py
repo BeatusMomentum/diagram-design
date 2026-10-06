@@ -55,6 +55,16 @@ def main() -> int:
         else:
             print(f"OK: {label}")
 
+    def check_message(label: str, source: str, expect_text: str) -> None:
+        with tempfile.TemporaryDirectory() as scratch:
+            candidate = Path(scratch) / "candidate.html"
+            candidate.write_text(source, encoding="utf-8")
+            findings = module.check(candidate)
+        if len(findings) != 1 or expect_text not in findings[0]:
+            failures.append(f"{label}: expected one finding naming {expect_text!r}, got {findings}")
+        else:
+            print(f"OK: {label}")
+
     def check_file(label: str, path: Path, expect_findings: int) -> None:
         findings = module.check(path)
         if len(findings) != expect_findings:
@@ -159,13 +169,14 @@ def main() -> int:
         document(f'<line x1="40" y1="60" x2="100" y2="60" {arrow}/>' + stroked),
         1,
     )
+    # A fork shares the port and stacks its first 20px: both rules fire.
     check(
         "two connectors forking from one port",
         document(
             f'<path d="M 260,84 H 300" {arrow}/>'
             f'<path d="M 260,84 H 280 Q 288,84 288,92 V 120" {arrow}/>' + stroked
         ),
-        1,
+        2,
     )
     # One arrow lands where the next leaves: a chain the reader follows in order.
     check(
@@ -191,6 +202,44 @@ def main() -> int:
             f'<line x1="100" y1="40" x2="100" y2="200" {arrow}/>'
         ),
         0,
+    )
+    # Compact arc flags (`0120 20` = flags 0 and 1, then 20 20) must parse, so a
+    # diagonal after the arc is still found rather than the path being dropped.
+    check_message(
+        "diagonal after a compact-flag arc is found",
+        document(f'<path d="M 20,20 A 8 8 0 0128 28 L 60 60" {arrow}/>'),
+        "diagonal segment",
+    )
+    check_message(
+        "unparseable arrowed path fails closed",
+        document(f'<path d="M 10 10 L 20" {arrow}/>'),
+        "cannot parse",
+    )
+    # Rule 4: 12px between ports on a normal edge, 8px on a very small box.
+    check(
+        "ports 10px apart on a 64px edge",
+        document(
+            f'<path d="M 260,80 H 300" {arrow}/><path d="M 260,90 H 280 Q 288,90 288,98 V 140" {arrow}/>'
+            + stroked
+        ),
+        1,
+    )
+    check(
+        "ports 10px apart on a 40px edge",
+        document(
+            f'<path d="M 260,72 H 300" {arrow}/><path d="M 260,82 H 280 Q 288,82 288,90 V 140" {arrow}/>'
+            '<rect x="100" y="60" width="160" height="40" rx="6" fill="#fff" stroke="#2d3142"/>'
+        ),
+        0,
+    )
+    # Rule 3: two sources sharing one trunk stack their strokes.
+    check(
+        "two connectors stacked on one trunk",
+        document(
+            f'<path d="M 20,200 H 52 Q 60,200 60,192 V 100" {arrow}/>'
+            f'<path d="M 20,240 H 52 Q 60,240 60,232 V 120" {arrow}/>'
+        ),
+        1,
     )
     # Coordinates under a rotate are not canvas space; skip rather than misjudge.
     check(
