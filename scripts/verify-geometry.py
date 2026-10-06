@@ -39,9 +39,11 @@ and chart bars stay out of it. Five shapes are reported:
 * Two connectors leaving (or two arriving at) the same edge of a node closer
   than primitives-core.md rule 4 allows: 12px, or 8px on an edge shorter than
   48px. A head-to-tail chain joint is allowed.
-* Two connectors drawn within 1px of each other for more than 4px, straight
-  or curved: the stacked trunk primitives-core.md rule 3 forbids. Curves and
-  arcs are flattened into short chords so their shape is compared too.
+* Two connectors drawn within 1px of each other along a continuous stretch
+  longer than 4px, straight or curved: the stacked trunk primitives-core.md
+  rule 3 forbids. Curves and arcs are flattened into short chords so their
+  shape is compared too. Forks and merges from one point count from that
+  point; only a head-to-tail joint is exempt near the joint.
 
 An arrowed path whose data the checker cannot parse is reported too, so a
 connector never passes because nothing read it.
@@ -535,38 +537,50 @@ def distance_to_segment(px: float, py: float, segment: Segment) -> float:
 
 
 def shared_run(a: list[Segment], b: list[Segment]) -> float:
-    """Length of connector `a` drawn within 1px of connector `b`.
+    """Longest continuous stretch of connector `a` drawn within 1px of connector `b`.
 
     Straight runs and curve chords count alike, so a shared curved trunk is
-    caught as well as a straight one. Samples near an endpoint the two share
-    are skipped: a head-to-tail joint or a common port is judged by the port
-    checks, not counted as a stacked run.
+    caught as well as a straight one. The run must be continuous: two separate
+    right-angle crossings each touch for a pixel or two and never add up to a
+    shared trunk. Only a head-to-tail joint, where one arrow ends and the
+    other starts, is exempt near the joint; a fork or merge from one shared
+    point is measured from that point.
     """
 
     left, top, right, bottom = bounds(b, STACK_TOLERANCE)
     a_left, a_top, a_right, a_bottom = bounds(a, 0.0)
     if a_right < left or a_left > right or a_bottom < top or a_top > bottom:
         return 0.0
-    ends_a = ((a[0][1], a[0][2]), (a[-1][3], a[-1][4]))
-    ends_b = ((b[0][1], b[0][2]), (b[-1][3], b[-1][4]))
-    joints = [p for p in ends_a if any(math.dist(p, q) <= STACK_TOLERANCE for q in ends_b)]
+    a_start, a_end = (a[0][1], a[0][2]), (a[-1][3], a[-1][4])
+    b_start, b_end = (b[0][1], b[0][2]), (b[-1][3], b[-1][4])
+    joints = [
+        joint
+        for joint, other in ((a_end, b_start), (a_start, b_end))
+        if math.dist(joint, other) <= STACK_TOLERANCE
+    ]
     boxes = [bounds([segment], STACK_TOLERANCE) for segment in b]
-    shared = 0
+
+    def near(px: float, py: float) -> bool:
+        if not (left <= px <= right and top <= py <= bottom):
+            return False
+        if any(math.dist((px, py), joint) < CORNER_CLEARANCE for joint in joints):
+            return False
+        return any(
+            bx0 <= px <= bx1 and by0 <= py <= by1
+            and distance_to_segment(px, py, segment) <= STACK_TOLERANCE
+            for segment, (bx0, by0, bx1, by1) in zip(b, boxes)
+        )
+
+    longest = run = 0
     for _, x1, y1, x2, y2 in a:
         steps = max(1, math.ceil(math.hypot(x2 - x1, y2 - y1) / SAMPLE_STEP))
         for i in range(steps):
-            px, py = x1 + (x2 - x1) * i / steps, y1 + (y2 - y1) * i / steps
-            if not (left <= px <= right and top <= py <= bottom):
-                continue
-            if any(math.dist((px, py), joint) < CORNER_CLEARANCE for joint in joints):
-                continue
-            if any(
-                bx0 <= px <= bx1 and by0 <= py <= by1
-                and distance_to_segment(px, py, segment) <= STACK_TOLERANCE
-                for segment, (bx0, by0, bx1, by1) in zip(b, boxes)
-            ):
-                shared += 1
-    return shared * SAMPLE_STEP
+            if near(x1 + (x2 - x1) * i / steps, y1 + (y2 - y1) * i / steps):
+                run += 1
+                longest = max(longest, run)
+            else:
+                run = 0
+    return longest * SAMPLE_STEP
 
 
 def stacked_connectors(

@@ -258,6 +258,20 @@ def main() -> int:
         document(f'<path d="M 10,50 H 90" {arrow}/><path d="M 50,10 V 90" {arrow}/>'),
         0,
     )
+    # Two separate right-angle crossings touch briefly twice; they must not add
+    # up to a shared run.
+    check(
+        "two separate crossings are not a stacked run",
+        document(f'<path d="M 10,50 H 90" {arrow}/><path d="M 30,10 V 90 H 70 V 10" {arrow}/>'),
+        0,
+    )
+    # A fork away from any node shares a short stroke from one start point;
+    # only head-to-tail joints are exempt, so it is measured from that point.
+    check_message(
+        "short fork from a shared start with no node",
+        document(f'<path d="M 10,50 H 16 V 10" {arrow}/><path d="M 10,50 H 16 V 90" {arrow}/>'),
+        "runs on top of",
+    )
     # Coordinates under a rotate are not canvas space; skip rather than misjudge.
     check(
         "connector under a non-translate transform is skipped",
