@@ -15,6 +15,8 @@ ARCHITECTURE = ASSET_DIR / "example-architecture.html"
 SWIMLANE = ASSET_DIR / "example-swimlane.html"
 ZONED = ASSET_DIR / "example-dp-integration.html"
 SEQUENCE_OAUTH = ASSET_DIR / "example-sequence-oauth.html"
+HIGH_LEVEL = ASSET_DIR / "example-high-level.html"
+QUEUE_ANIMATED = ASSET_DIR / "example-queue-animated.html"
 
 
 def load_verifier():
@@ -120,8 +122,87 @@ def main() -> int:
         0,
     )
 
+    # Connector routing. A stroked node; arrows carry a marker to count.
+    stroked = '<rect x="100" y="60" width="160" height="64" rx="6" fill="#fff" stroke="#2d3142"/>'
+    arrow = 'fill="none" stroke="#4f5d75" marker-end="url(#arrow)"'
+
+    # The reported defect: leave the top edge, then run flat along the border,
+    # so the arrow appears to grow out of the top-right corner.
+    check(
+        "connector riding a node's top border",
+        document(f'<path d="M 180,60 H 332 Q 340,60 340,52 V 20" {arrow}/>' + stroked),
+        1,
+    )
+    check(
+        "connector leaving the side edge at its own port",
+        document(f'<path d="M 260,84 H 332 Q 340,84 340,76 V 20" {arrow}/>' + stroked),
+        0,
+    )
+    check(
+        "diagonal connector",
+        document(f'<line x1="10" y1="10" x2="60" y2="40" {arrow}/>'),
+        1,
+    )
+    check(
+        "diagonal line without a marker is not a connector",
+        document('<line x1="10" y1="10" x2="60" y2="40" stroke="#4f5d75"/>'),
+        0,
+    )
+    # Loop write-back spokes are the documented radial exception.
+    check(
+        "loop spoke is exempt from the diagonal rule",
+        document(f'<path class="spoke" d="M 10 10 L 60 40" {arrow}/>'),
+        0,
+    )
+    check(
+        "connector landing on a node corner",
+        document(f'<line x1="40" y1="60" x2="100" y2="60" {arrow}/>' + stroked),
+        1,
+    )
+    check(
+        "two connectors forking from one port",
+        document(
+            f'<path d="M 260,84 H 300" {arrow}/>'
+            f'<path d="M 260,84 H 280 Q 288,84 288,92 V 120" {arrow}/>' + stroked
+        ),
+        1,
+    )
+    # One arrow lands where the next leaves: a chain the reader follows in order.
+    check(
+        "head-to-tail chain joint is legal",
+        document(
+            f'<path d="M 60,60 C 60,0 180,0 180,60" {arrow}/>'
+            f'<path d="M 180,60 C 180,0 300,0 300,60" {arrow}/>' + stroked
+        ),
+        0,
+    )
+    # Identical local geometry in two translated panels must not collide.
+    panel = f'<path d="M 260,84 H 300" {arrow}/>' + stroked
+    check(
+        "translated panels are compared in canvas space",
+        document(f'<g transform="translate(0 0)">{panel}</g><g transform="translate(400 0)">{panel}</g>'),
+        0,
+    )
+    # An arrowed axis along an unstroked quadrant fill is not a border ride.
+    check(
+        "unstroked fill rect is not a node",
+        document(
+            '<rect x="100" y="60" width="160" height="64" fill="rgba(235,108,54,0.04)"/>'
+            f'<line x1="100" y1="40" x2="100" y2="200" {arrow}/>'
+        ),
+        0,
+    )
+    # Coordinates under a rotate are not canvas space; skip rather than misjudge.
+    check(
+        "connector under a non-translate transform is skipped",
+        document(f'<g transform="rotate(45)"><line x1="10" y1="10" x2="60" y2="40" {arrow}/></g>'),
+        0,
+    )
+
     check_file("shipped architecture example", ARCHITECTURE, 0)
     check_file("shipped swimlane example", SWIMLANE, 0)
+    check_file("shipped high-level example", HIGH_LEVEL, 0)
+    check_file("shipped queue animation", QUEUE_ANIMATED, 0)
     check_file("shipped zoned example", ZONED, 0)
     check_file("shipped sequence-oauth example", SEQUENCE_OAUTH, 0)
 
