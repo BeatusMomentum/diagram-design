@@ -97,7 +97,7 @@ Render **the original HTML** (not the extracted SVG) and screenshot only the `<s
 Before running anything, verify Playwright is installed:
 
 ```
-python -c "import playwright" 2>NUL || python -c "import playwright"
+python3 -c "import playwright"
 ```
 
 If the import fails, surface this exact instruction to the user and stop:
@@ -111,7 +111,7 @@ Don't auto-install. The user asked for one feature, not a system change.
 
 ### Rasterize
 
-Write the snippet below to a temp file and run it with `python <tmp.py> <src.html> <out.png>`:
+Write the snippet below to a temp file and run it with `python3 <tmp.py> <src.html> <out.png>`:
 
 ```python
 from playwright.sync_api import TimeoutError as PlaywrightTimeoutError, sync_playwright
