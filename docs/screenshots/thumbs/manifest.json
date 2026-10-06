@@ -126,11 +126,11 @@
     {
       "thumb": "flowchart.webp",
       "source": "docs/screenshots/flowchart.png",
-      "source_sha256": "74729889a792981f49bd652b337e9eb3087001c14bc28dd7fd5ea9cfc6814b57",
+      "source_sha256": "58556c5bcdf39fbaa817abca5e4a72180ef87469d2df30b961e87d1a39ac1ddf",
       "width": 600,
       "height": 360,
       "quality": 82,
-      "thumb_sha256": "44224cd3f8b0e6fa0b8fad43371659be08d3eeded256d2b895736acd9076fcb1"
+      "thumb_sha256": "d6c3b7cbc7d7ff677df4b956646d086ad67bf2a69c92be63545ffdeed9e563b1"
     },
     {
       "thumb": "gantt.webp",
